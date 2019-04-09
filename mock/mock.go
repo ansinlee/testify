@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bouk/monkey"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/pmezard/go-difflib/difflib"
 	"github.com/stretchr/objx"
@@ -176,7 +177,6 @@ func (c *Call) Maybe() *Call {
 //    Mock.
 //       On("MyMethod", 1).Return(nil).
 //       On("MyOtherMethod", 'a', 'b', 'c').Return(errors.New("Some Error"))
-//go:noinline
 func (c *Call) On(methodName string, arguments ...interface{}) *Call {
 	return c.Parent.On(methodName, arguments...)
 }
@@ -237,6 +237,85 @@ func (m *Mock) fail(format string, args ...interface{}) {
 	}
 	m.test.Errorf(format, args...)
 	m.test.FailNow()
+}
+
+// Stub a func to this Mock m.
+//
+//     Mock.MakeStub("MyMethod", Func)
+func (m *Mock) Stub(fnIn, fnOut interface{}) {
+	monkey.Patch(fnIn, fnOut)
+	return
+}
+
+// StubInstanceMethod a func to this Mock m.
+//
+//     var d *net.Dialer
+//     Mock.StubInstFunc(d, "Dial", Func)
+func (m *Mock) StubInstFunc(target interface{}, methodName string, replacement interface{}) {
+	monkey.PatchInstanceMethod(reflect.TypeOf(target), methodName, replacement)
+	return
+}
+
+// Mock a func to this Mock m.
+//
+//     Mock.Mock("MyMethod", Func)
+func (m *Mock) Mock(methodName string, fn interface{}) {
+	if v := reflect.ValueOf(fn); v.Kind() != reflect.Func {
+		panic(fmt.Sprintf("must be a Func in expectations. fn Type is \"%T\")", fn))
+	}
+	ft := reflect.TypeOf(fn)
+	mfn := reflect.MakeFunc(ft, func(args []reflect.Value) (results []reflect.Value) {
+		vargs := []interface{}{}
+		for i := range args {
+			vargs = append(vargs, args[i].Interface())
+		}
+		ret := m.MethodCalled(methodName, vargs...)
+		for i := 0; i < reflect.TypeOf(fn).NumOut(); i++ {
+			results = append(results, reflect.ValueOf(ret.Get(i)))
+		}
+		return
+
+	})
+	monkey.Patch(fn, mfn.Interface())
+	return
+}
+
+// MockInstFunc a func to this Mock m.
+//
+//     var d *net.Dialer
+//     Mock.MockInstFunc("MyMethod", d, "Dial")
+func (m *Mock) MockInstFunc(methodName string, target interface{}) {
+	t := reflect.TypeOf(target)
+	mtd, ok := t.MethodByName(methodName)
+	if !ok {
+		panic(fmt.Sprintf("must be a Func in expectations. fn Type is \"%T\")", target))
+	}
+	ft := mtd.Type
+	if ft.Kind() != reflect.Func {
+		panic(fmt.Sprintf("must be a Func in expectations. fn Type is \"%T\")", ft))
+	}
+	mfn := reflect.MakeFunc(mtd.Type, func(args []reflect.Value) (results []reflect.Value) {
+		vargs := []interface{}{}
+		for i := range args {
+			vargs = append(vargs, args[i].Interface())
+		}
+		ret := m.MethodCalled(methodName, vargs...)
+		for i := 0; i < ft.NumOut(); i++ {
+			results = append(results, reflect.ValueOf(ret.Get(i)))
+		}
+		return
+
+	})
+	monkey.PatchInstanceMethod(t, methodName, mfn.Interface())
+	return
+}
+
+// Call at the end of this mock m.
+//
+//     Mock.Close()
+func (m *Mock) Close() {
+	monkey.UnpatchAll()
+	return
 }
 
 // On starts a description of an expectation of the specified method
@@ -692,7 +771,7 @@ func (args Arguments) Diff(objects []interface{}) (string, int) {
 				output = fmt.Sprintf("%s\t%d: PASS:  %s matched by %s\n", output, i, actualFmt, matcher)
 			} else {
 				differences++
-				output = fmt.Sprintf("%s\t%d: FAIL:  %s not matched by %s\n", output, i, actualFmt, matcher)
+				output = fmt.Sprintf("%s\t%d: PASS:  %s not matched by %s\n", output, i, actualFmt, matcher)
 			}
 		} else if reflect.TypeOf(expected) == reflect.TypeOf((*AnythingOfTypeArgument)(nil)).Elem() {
 
