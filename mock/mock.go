@@ -241,7 +241,7 @@ func (m *Mock) fail(format string, args ...interface{}) {
 
 // Stub a func to this Mock m.
 //
-//     Mock.MakeStub("MyMethod", Func)
+//     Mock.Stub("MyMethod", Func)
 func (m *Mock) Stub(fnIn, fnOut interface{}) {
 	monkey.Patch(fnIn, fnOut)
 	return
